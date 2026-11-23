@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CrossHope LS Forms
 // @namespace    https://crosshopetreatment.com/ls-tools
-// @version      1.0.0
+// @version      1.1.0
 // @description  Adds an "Open a form" button to LightningStep. Pick a form, type the patient's name, and the form opens on their chart.
 // @author       CrossHope
 // @match        https://chtc.lightningstep.com/*
@@ -25,6 +25,8 @@
   if (document.getElementById('lsfp-btn')) return;
 
   var FORMS = [
+    ['MH Biopsych', 'Mental Health Biopsychosocial'],
+    ['SUD Biopsych', 'Biopsychosocial Assessment AR'],
     ['LOCUS', 'LOCUS Reassessment'],
     ['ASAM', 'ASAM Reassessment'],
     ['CIWA-Ar', 'Custom CIWA AR Assessment'],
