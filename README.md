@@ -4,7 +4,10 @@ Browser helpers for CrossHope staff in LightningStep (chtc.lightningstep.com). N
 
 ## LS Forms (`ls-forms.user.js`)
 
-Adds an **Open a form** button to the bottom right of every LightningStep page. Pick a form, type the patient's name or MRN, and the form opens on that patient's chart. Buttons: MH Biopsych, SUD Biopsych, LOCUS, ASAM, CIWA-Ar, COWS, C-SSRS + Safety Plan, Safety Plan, Individual Note, Treatment Plan Review.
+Adds buttons to the bottom right of LightningStep pages:
+- **Open a form**: pick a form, type the patient's name or MRN, and the form opens on that patient's chart.
+- **New patient**: paste the Teams VOB, drop the prescreen PDF, check one screen, Save. Enters the inquiry, payer, admission and allergies, then opens the Biopsych.
+- On a chart: **Ready for Assessment**, **Level of care** (step up/down, or fix a patient entered in the wrong program) and **Discharge**. Buttons: MH Biopsych, SUD Biopsych, LOCUS, ASAM, CIWA-Ar, COWS, C-SSRS + Safety Plan, Safety Plan, Individual Note, Treatment Plan Review.
 
 ### Install (Chrome on Windows, once per computer)
 
