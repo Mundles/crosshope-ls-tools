@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CrossHope LS Forms
 // @namespace    https://crosshopetreatment.com/ls-tools
-// @version      2.3.1
+// @version      2.3.2
 // @description  CrossHope helpers for LightningStep: Open a form, New patient (Teams VOB + prescreen PDF to an admitted chart), Ready for Assessment, Discharge, Change level of care, Treatment plans and New letter (CrossHope letterhead in Word).
 // @author       CrossHope
 // @match        https://chtc.lightningstep.com/*
@@ -77,7 +77,7 @@
   var FORMS = [
     ['MH Biopsych', 'Mental Health Biopsychosocial'],
     ['SUD Biopsych', 'Biopsychosocial Assessment AR'],
-    ['LOCUS', 'LOCUS Reassessment'],
+    ['LOCUS', 'LOCUS Assessment WebPass'],
     ['ASAM', 'ASAM Reassessment'],
     ['CIWA-Ar', 'Custom CIWA AR Assessment'],
     ['COWS', 'Custom COWS Assessment'],
@@ -86,9 +86,9 @@
     ['Individual Note', '#note'],
     ['Treatment Plan Review', '#tpr']
   ];
-  var sel = 'LOCUS Reassessment';
+  var sel = 'LOCUS Assessment WebPass';
   try { sel = localStorage.getItem('lsfp-form') || sel; } catch (e) {}
-  if (!FORMS.some(function (x) { return x[1] === sel; })) sel = 'LOCUS Reassessment';
+  if (!FORMS.some(function (x) { return x[1] === sel; })) sel = 'LOCUS Assessment WebPass';
 
   // Never print the button or the box.
   var st = document.createElement('style');
