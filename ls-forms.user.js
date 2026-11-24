@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CrossHope LS Forms
 // @namespace    https://crosshopetreatment.com/ls-tools
-// @version      2.3.0
+// @version      2.3.1
 // @description  CrossHope helpers for LightningStep: Open a form, New patient (Teams VOB + prescreen PDF to an admitted chart), Ready for Assessment, Discharge, Change level of care, Treatment plans and New letter (CrossHope letterhead in Word).
 // @author       CrossHope
 // @match        https://chtc.lightningstep.com/*
@@ -92,7 +92,7 @@
 
   // Never print the button or the box.
   var st = document.createElement('style');
-  st.textContent = '@media print{#lsfp-bar,#lsfp,#lsnp,#lslc,#lstp{display:none!important}}';
+  st.textContent = '@media print{#lsfp-bar,#lsfp,#lsnp,#lslc,#lstp,#lstprd{display:none!important}}';
   document.head.appendChild(st);
 
   var btn = document.createElement('button');
@@ -1419,8 +1419,64 @@ var TP = (function () {
     }
     draw(false);
   }
-  return { open: open, badge: badge, load: load };
+  // Treatment plan page: check "Date Next Review" so LightningStep's own
+  // "Treatment Plan Review Due Today" notification fires on the right day.
+  // Shows a note under the field; nothing changes until staff click the button.
+  async function program(cid) {
+    try { var c = JSON.parse(localStorage.getItem(CACHE) || 'null'); var hit = c && (c.list || []).filter(function (x) { return String(x.c) === String(cid); })[0]; if (hit) return hit.p; } catch (e) {}
+    var cen = await post('/home/census', 'draw=1&start=0&length=2000&programfilter%5B%5D=0');
+    var row = (cen.data || []).filter(function (r) { return String(r.client_id) === String(cid) && String(r.isdc) !== '1'; })[0];
+    if (!row) return '';
+    var p = strip(row.pgmname);
+    return /PHP/i.test(p) ? 'PHP' : (/IOP/i.test(p) ? 'IOP' : '');
+  }
+  function iso(d) { var m = d.getMonth() + 1, x = d.getDate(); return d.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (x < 10 ? '0' : '') + x; }
+  function expected(p, plan) { return p === 'PHP' ? addWorkdays(plan, RULE.PHP.workdays) : (p === 'IOP' ? addDays(plan, RULE.IOP.days) : null); }
+  async function reviewDate(doc) {
+    doc = doc || document;
+    var dd = doc.getElementById('datedoc'), dr = doc.getElementById('datereview');
+    if (!dd || !dr || dr.disabled || dr.readOnly) return 'no-field';
+    var cidEl = doc.querySelector('[name="client_id"]'); var cid = cidEl && cidEl.value;
+    if (!cid) return 'no-client';
+    var p = ''; try { p = await program(cid); } catch (e) {}
+    if (!p) return 'no-program';
+    var note = doc.getElementById('lstprd');
+    if (!note) { note = doc.createElement('div'); note.id = 'lstprd'; dr.parentNode.appendChild(note); }
+    function check() {
+      var plan = day(dd.value), want = plan && expected(p, plan), have = day(dr.value);
+      note.innerHTML = '';
+      if (!want) { note.style.display = 'none'; return 'no-plan-date'; }
+      note.style.cssText = 'margin-top:6px;padding:8px 10px;border-radius:8px;font:14px system-ui,"Segoe UI",sans-serif';
+      var label = p + ' plans are reviewed ' + RULE[p].label + ', so the next review is due ' + fmt(want) + '.';
+      var bad = !have || have <= plan;
+      var t = doc.createElement('span');
+      if (bad) {
+        note.style.background = '#fef3c7'; note.style.border = '1px solid #f59e0b';
+        t.textContent = (have ? 'Date Next Review is the same as the plan date. ' : 'Date Next Review is blank. ') + label + ' LightningStep reminds Connie on that date. ';
+        note.appendChild(t);
+        var b = doc.createElement('button'); b.type = 'button'; b.textContent = 'Set it to ' + fmt(want);
+        b.style.cssText = 'background:#b45309;color:#fff;border:0;border-radius:6px;padding:5px 12px;font-weight:600;cursor:pointer';
+        b.onclick = function () {
+          dr.value = iso(want);
+          dr.dispatchEvent(new Event('input', { bubbles: true })); dr.dispatchEvent(new Event('change', { bubbles: true }));
+          var jq = doc.defaultView && doc.defaultView.jQuery; if (jq) { try { jq(dr).trigger('change'); } catch (e) {} }
+          check();
+        };
+        note.appendChild(b);
+        return 'flagged';
+      }
+      note.style.background = '#ecfdf5'; note.style.border = '1px solid #10b981';
+      t.textContent = label + (have > want ? ' The date entered is later than that.' : ' LightningStep reminds Connie on the Date Next Review.');
+      note.appendChild(t);
+      return 'ok';
+    }
+    if (!dd.__lstprd) { dd.__lstprd = 1; dd.addEventListener('change', check); dr.addEventListener('change', check); }
+    return check();
+  }
+
+  return { open: open, badge: badge, load: load, reviewDate: reviewDate, expected: expected };
 })();
 
 if (location.hostname === 'chtc.lightningstep.com') { try { LC.notePages(); } catch (e) {} }
+if (location.hostname === 'chtc.lightningstep.com' && /^\/txplan\/(\d+\/edit|edit\/\d+)/.test(location.pathname)) { setTimeout(function () { try { TP.reviewDate(); } catch (e) {} }, 1200); }
 })();
