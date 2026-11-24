@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         CrossHope LS Forms
 // @namespace    https://crosshopetreatment.com/ls-tools
-// @version      2.1.0
-// @description  CrossHope helpers for LightningStep: Open a form, New patient (Teams VOB + prescreen PDF to an admitted chart), Ready for Assessment, Discharge and Change level of care.
+// @version      2.2.0
+// @description  CrossHope helpers for LightningStep: Open a form, New patient (Teams VOB + prescreen PDF to an admitted chart), Ready for Assessment, Discharge, Change level of care and New letter (CrossHope letterhead in Word).
 // @author       CrossHope
 // @match        https://chtc.lightningstep.com/*
+// @match        https://restaurabh.sharepoint.com/sites/RestauraBH/*
 // @noframes
 // @grant        none
 // @run-at       document-idle
@@ -18,6 +19,55 @@
 
 (function () {
   'use strict';
+  // New letter, part 2: runs on SharePoint only when the LightningStep button
+  // opened it (?chletter=1). Copies the letterhead template into CrossHope
+  // Letters with a new name, then opens the copy in Word for the web.
+  // The template itself is never opened or changed.
+  if (location.hostname !== 'restaurabh.sharepoint.com') return;
+  if (!/[?&]chletter=1/.test(location.search)) return;
+  var SITE = '/sites/RestauraBH';
+  var FOLDER = SITE + '/Shared Documents/Arkansas Clinic/CrossHope Letters';
+  var TEMPLATE = FOLDER + '/_Template (do not edit)/CrossHope Letterhead.docx';
+  var H = { Accept: 'application/json;odata=nometadata', 'Content-Type': 'application/json;odata=nometadata' };
+  function say(html, bad) {
+    var d = document.getElementById('chletter-msg');
+    if (!d) { d = document.createElement('div'); d.id = 'chletter-msg'; document.documentElement.appendChild(d); }
+    d.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#fff;border:3px solid ' + (bad ? '#b91c1c' : '#1a73e8') + ';border-radius:10px;padding:16px 20px;font:16px system-ui,"Segoe UI",sans-serif;max-width:560px;box-shadow:0 6px 24px rgba(0,0,0,.25)';
+    d.innerHTML = html;
+  }
+  function stamp() {
+    var n = new Date(), h = n.getHours(), ap = h < 12 ? 'AM' : 'PM'; h = h % 12 || 12;
+    var p = function (x) { return (x < 10 ? '0' : '') + x; };
+    return n.getFullYear() + '-' + p(n.getMonth() + 1) + '-' + p(n.getDate()) + ' ' + h + '-' + p(n.getMinutes()) + '-' + p(n.getSeconds()) + ' ' + ap;
+  }
+  async function go() {
+    say('<b>Making a new CrossHope letter...</b>');
+    try {
+      var ci = await fetch(SITE + '/_api/contextinfo', { method: 'POST', headers: H, credentials: 'include' });
+      if (!ci.ok) throw new Error('no-access');
+      var dg = (await ci.json()).FormDigestValue;
+      var name = 'Letter ' + stamp() + '.docx';
+      var dst = FOLDER + '/' + name;
+      var r = await fetch(SITE + '/_api/SP.MoveCopyUtil.CopyFileByPath(overwrite=false)', { method: 'POST', credentials: 'include', headers: Object.assign({ 'X-RequestDigest': dg }, H),
+        body: JSON.stringify({ srcPath: { DecodedUrl: location.origin + TEMPLATE }, destPath: { DecodedUrl: location.origin + dst } }) });
+      if (r.status === 401 || r.status === 403) throw new Error('no-access');
+      if (!r.ok) throw new Error('copy ' + r.status);
+      var f = await fetch(SITE + "/_api/web/GetFileByServerRelativePath(decodedurl='" + encodeURIComponent(dst).replace(/'/g, "''") + "')?$select=UniqueId", { headers: H, credentials: 'include' });
+      if (!f.ok) throw new Error('find ' + f.status);
+      var id = (await f.json()).UniqueId;
+      say('<b>Opening your letter in Word...</b><br>It saves itself in CrossHope Letters as "' + name + '". Rename it when you\'re done (use initials, not the full name).');
+      location.replace(SITE + '/_layouts/15/Doc.aspx?sourcedoc={' + id + '}&action=edit');
+    } catch (e) {
+      if (e.message === 'no-access') say('<b>You don\'t have access to the CrossHope Letters folder yet.</b><br>Ask Mendy to share it with you, then click New letter again.', true);
+      else say('<b>The letter didn\'t open.</b> (' + e.message + ')<br>Try New letter again. If it keeps happening, tell Mendy.', true);
+    }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go); else go();
+})();
+
+(function () {
+  'use strict';
+  if (location.hostname !== 'chtc.lightningstep.com') return;
 
   // Only on signed-in pages.
   if (/^\/(login|password|session|logout)/i.test(location.pathname)) return;
@@ -62,6 +112,10 @@
     bar.appendChild(mk('lslc-loc', 'Level of care', '#b45309', function () { LC.openLoc(); }));
     bar.appendChild(mk('lslc-dc', 'Discharge', '#b91c1c', function () { LC.openDischarge(); }));
   }
+  bar.appendChild(mk('lsltr-btn', 'New letter', '#1e3a8a', function () {
+    // Opens a fresh copy of the CrossHope letterhead in Word for the web.
+    window.open('https://restaurabh.sharepoint.com/sites/RestauraBH/Shared%20Documents/Forms/AllItems.aspx?chletter=1&id=' + encodeURIComponent('/sites/RestauraBH/Shared Documents/Arkansas Clinic/CrossHope Letters'), '_blank');
+  }));
   bar.appendChild(mk('lsnp-btn', 'New patient', '#0f766e', function () { NP.openWizard(); }));
   btn.style.boxShadow = '0 4px 14px rgba(0,0,0,.25)';
   bar.appendChild(btn);
@@ -1243,5 +1297,5 @@ var LC = (function () {
   return { openDischarge: openDischarge, openLoc: openLocOrResume, notePages: notePages };
 })();
 
-try { LC.notePages(); } catch (e) {}
+if (location.hostname === 'chtc.lightningstep.com') { try { LC.notePages(); } catch (e) {} }
 })();
