@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         CrossHope LS Forms
 // @namespace    https://crosshopetreatment.com/ls-tools
-// @version      2.2.0
-// @description  CrossHope helpers for LightningStep: Open a form, New patient (Teams VOB + prescreen PDF to an admitted chart), Ready for Assessment, Discharge, Change level of care and New letter (CrossHope letterhead in Word).
+// @version      2.3.0
+// @description  CrossHope helpers for LightningStep: Open a form, New patient (Teams VOB + prescreen PDF to an admitted chart), Ready for Assessment, Discharge, Change level of care, Treatment plans and New letter (CrossHope letterhead in Word).
 // @author       CrossHope
 // @match        https://chtc.lightningstep.com/*
 // @match        https://restaurabh.sharepoint.com/sites/RestauraBH/*
@@ -92,7 +92,7 @@
 
   // Never print the button or the box.
   var st = document.createElement('style');
-  st.textContent = '@media print{#lsfp-bar,#lsfp,#lsnp,#lslc{display:none!important}}';
+  st.textContent = '@media print{#lsfp-bar,#lsfp,#lsnp,#lslc,#lstp{display:none!important}}';
   document.head.appendChild(st);
 
   var btn = document.createElement('button');
@@ -112,6 +112,9 @@
     bar.appendChild(mk('lslc-loc', 'Level of care', '#b45309', function () { LC.openLoc(); }));
     bar.appendChild(mk('lslc-dc', 'Discharge', '#b91c1c', function () { LC.openDischarge(); }));
   }
+  var tpBtn = mk('lstp-btn', 'Treatment plans', '#0e7490', function () { TP.open(); });
+  bar.appendChild(tpBtn);
+  setTimeout(function () { try { TP.badge(tpBtn); } catch (e) {} }, 1500);
   bar.appendChild(mk('lsltr-btn', 'New letter', '#1e3a8a', function () {
     // Opens a fresh copy of the CrossHope letterhead in Word for the web.
     window.open('https://restaurabh.sharepoint.com/sites/RestauraBH/Shared%20Documents/Forms/AllItems.aspx?chletter=1&id=' + encodeURIComponent('/sites/RestauraBH/Shared Documents/Arkansas Clinic/CrossHope Letters'), '_blank');
@@ -1295,6 +1298,128 @@ var LC = (function () {
   }
 
   return { openDischarge: openDischarge, openLoc: openLocOrResume, notePages: notePages };
+})();
+
+// ---------- Treatment plans: who needs a plan or a review ----------
+var TP = (function () {
+  'use strict';
+  // House rules (change here). PHP: DHS Partial Hospitalization rule says review
+  // every 20 days of service; counted here as 20 weekdays. IOP: every 30 days
+  // (CrossHope's usual "Date Next Review" pattern).
+  var RULE = { PHP: { workdays: 20, label: 'every 20 service days' }, IOP: { days: 30, label: 'every 30 days' } };
+  var SOON = 7; // "Due this week" window, in days
+  var CACHE = 'lstp-cache-v1', TTL = 60 * 60 * 1000;
+  var strip = function (s) { return String(s == null ? '' : s).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(); };
+  var tok = function () { return document.querySelector('meta[name="csrf-token"]').content; };
+  async function post(u, body) {
+    var t = tok();
+    var r = await fetch(u, { method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-TOKEN': t, 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body: '_token=' + encodeURIComponent(t) + '&' + body });
+    if (!r.ok) throw new Error('LightningStep answered ' + r.status);
+    return r.json();
+  }
+  function day(s) { var m = String(s || '').match(/(\d{4})-(\d{2})-(\d{2})/) || []; if (m[1]) return new Date(+m[1], m[2] - 1, +m[3]); m = String(s || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m ? new Date(+m[3], m[1] - 1, +m[2]) : null; }
+  function today() { var n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); }
+  function addDays(d, n) { var x = new Date(d); x.setDate(x.getDate() + n); return x; }
+  function addWorkdays(d, n) { var x = new Date(d); while (n > 0) { x.setDate(x.getDate() + 1); if (x.getDay() % 6) n--; } return x; }
+  function diff(a, b) { return Math.round((a - b) / 86400000); }
+  function fmt(d) { return d ? (d.getMonth() + 1) + '/' + d.getDate() + '/' + d.getFullYear() : ''; }
+  function shortName(n) { var p = n.split(/,\s*/); return p.length > 1 ? (p[1] + ' ' + p[0].charAt(0) + '.') : n; }
+
+  async function load(force) {
+    if (!force) { try { var c = JSON.parse(localStorage.getItem(CACHE) || 'null'); if (c && Date.now() - c.t < TTL) return c.list; } catch (e) {} }
+    var cen = await post('/home/census', 'draw=1&start=0&length=2000&programfilter%5B%5D=0');
+    var pts = (cen.data || []).filter(function (r) {
+      var p = strip(r.pgmname);
+      return /cross/i.test(r.location || '') && /^(PHP|IOP)$/.test(p) && String(r.isdc) !== '1';
+    }).map(function (r) {
+      var a = String(r.name || '').match(/<a\b[^>]*>([^<]*)<\/a>/i);
+      return { c: r.client_id, n: strip(a ? a[1] : r.lnamefname), p: strip(r.pgmname), adm: day(r.datepgmadmission_for_sort || r.dateagencyadmission_for_sort), ep: day(r.current_episode_for_sort) };
+    }).filter(function (r) { return !/^demo\b|,\s*demo\b/i.test(r.n); });
+    var out = [], i = 0;
+    async function one(r) {
+      var j = await post('/txplan/datatable', 'client_id=' + r.c + '&draw=1&start=0&length=100');
+      var since = r.ep || r.adm;
+      var plans = (j.data || []).map(function (x) { return { id: x.id, d: day(x.datedoc), tpr: String(x.istpr) === '1', st: strip(x.status) }; })
+        .filter(function (x) { return x.d && (!since || x.d >= addDays(since, -3)); })
+        .sort(function (a, b) { return b.d - a.d || b.id - a.id; });
+      var last = plans[0] || null, t = today(), o = { c: r.c, n: r.n, p: r.p, adm: r.adm && r.adm.getTime() };
+      if (!last) { o.g = 'none'; o.days = r.adm ? diff(t, r.adm) : null; }
+      else {
+        var due = r.p === 'PHP' ? addWorkdays(last.d, RULE.PHP.workdays) : addDays(last.d, RULE.IOP.days);
+        o.last = last.d.getTime(); o.kind = last.tpr ? 'Review' : 'Plan'; o.unsigned = last.st === 'Active';
+        o.due = due.getTime(); o.days = diff(t, last.d); o.left = diff(due, t);
+        o.g = o.left < 0 ? 'over' : (o.left <= SOON ? 'soon' : 'ok');
+      }
+      out.push(o);
+    }
+    var queue = pts.slice();
+    async function worker() { while (queue.length) { var r = queue.shift(); try { await one(r); } catch (e) { out.push({ c: r.c, n: r.n, p: r.p, g: 'err' }); } } }
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    try { localStorage.setItem(CACHE, JSON.stringify({ t: Date.now(), list: out })); } catch (e) {}
+    return out;
+  }
+  function count(list) { return list.filter(function (x) { return x.g === 'none' || x.g === 'over'; }).length; }
+
+  async function badge(btn) {
+    try { var l = await load(false); var n = count(l); btn.textContent = n ? 'Treatment plans (' + n + ')' : 'Treatment plans'; btn.style.background = n ? '#dc2626' : '#0e7490'; } catch (e) {}
+  }
+
+  async function startReview(o, msg) {
+    msg.textContent = 'Opening ' + shortName(o.n) + '...';
+    var h = await (await fetch('/client/index/' + o.c, { credentials: 'same-origin' })).text();
+    var url = (h.match(/\/txplan\/create\/\d+\/1\?episodeId=\d+/) || [])[0];
+    if (!url) { location.href = '/client/index/' + o.c + '?section=txplan'; return; }
+    try { localStorage.removeItem(CACHE); } catch (e) {}
+    location.href = url.replace(/&amp;/g, '&');
+  }
+
+  function open() {
+    var old = document.getElementById('lstp'); if (old) { old.remove(); return; }
+    var b = document.createElement('div'); b.id = 'lstp';
+    b.style.cssText = 'position:fixed;right:18px;bottom:74px;z-index:2147483647;background:#fff;border:2px solid #0e7490;border-radius:12px;padding:16px;width:640px;max-width:calc(100vw - 40px);max-height:78vh;overflow:auto;font:15px system-ui,"Segoe UI",sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.3)';
+    b.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:18px">Treatment plans</b><span><button type="button" id="lstpr" style="border:1px solid #ccc;background:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;margin-right:6px">Refresh</button><button type="button" id="lstpx" style="font-size:22px;border:0;background:none;cursor:pointer" title="Close">&times;</button></span></div>' +
+      '<div id="lstpm" style="margin:6px 0 10px;color:#555;font-size:13px">Checking every PHP and IOP patient on the census...</div><div id="lstpl"></div>';
+    document.body.appendChild(b);
+    b.querySelector('#lstpx').onclick = function () { b.remove(); };
+    b.querySelector('#lstpr').onclick = function () { draw(true); };
+    var msg = b.querySelector('#lstpm'), L = b.querySelector('#lstpl');
+    async function draw(force) {
+      L.innerHTML = ''; msg.textContent = 'Checking every PHP and IOP patient on the census...';
+      var list;
+      try { list = await load(force); } catch (e) { msg.textContent = 'Couldn\'t load the list (' + e.message + '). Make sure you\'re signed in, then click Refresh.'; return; }
+      msg.textContent = list.length + ' PHP and IOP patients checked. PHP plans are reviewed ' + RULE.PHP.label + ', IOP ' + RULE.IOP.label + '. Oldest first.';
+      var groups = [
+        ['none', 'No plan yet', '#b91c1c', function (a, b) { return (a.adm || 0) - (b.adm || 0); }],
+        ['over', 'Review overdue', '#dc2626', function (a, b) { return a.left - b.left; }],
+        ['soon', 'Due this week', '#b45309', function (a, b) { return a.left - b.left; }],
+        ['err', 'Couldn\'t check', '#555', null]
+      ];
+      var any = false;
+      groups.forEach(function (g) {
+        var rows = list.filter(function (x) { return x.g === g[0]; }); if (!rows.length) return; any = true;
+        if (g[3]) rows.sort(g[3]);
+        var h = document.createElement('div'); h.style.cssText = 'font-weight:700;color:' + g[2] + ';margin:12px 0 4px'; h.textContent = g[1] + ' (' + rows.length + ')'; L.appendChild(h);
+        rows.forEach(function (o) {
+          var d = document.createElement('div'); d.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;border:1px solid #e5e7eb;border-left:4px solid ' + g[2] + ';border-radius:8px;margin:4px 0';
+          var info = document.createElement('div');
+          var nm = document.createElement('b'); nm.textContent = o.n; info.appendChild(nm);
+          var sub = document.createElement('div'); sub.style.cssText = 'color:#555;font-size:13px';
+          if (o.g === 'none') sub.textContent = o.p + ' · admitted ' + fmt(o.adm ? new Date(o.adm) : null) + (o.days != null ? ' (' + o.days + ' days ago)' : '') + ' · no treatment plan';
+          else if (o.g === 'err') sub.textContent = o.p + ' · open the chart to check';
+          else sub.textContent = o.p + ' · last ' + o.kind.toLowerCase() + ' ' + fmt(new Date(o.last)) + ' (' + o.days + ' days ago) · ' + (o.left < 0 ? 'was due ' + fmt(new Date(o.due)) : 'due ' + fmt(new Date(o.due))) + (o.unsigned ? ' · not signed yet' : '');
+          info.appendChild(sub); d.appendChild(info);
+          var btn = document.createElement('button'); btn.type = 'button';
+          btn.style.cssText = 'white-space:nowrap;background:' + g[2] + ';color:#fff;border:0;border-radius:8px;padding:8px 12px;font-weight:600;cursor:pointer';
+          if (o.g === 'none' || o.g === 'err' || o.unsigned) { btn.textContent = o.unsigned ? 'Finish and sign' : (o.g === 'none' ? 'Open plans' : 'Open chart'); btn.onclick = function () { location.href = '/client/index/' + o.c + '?section=txplan'; }; }
+          else { btn.textContent = 'Update plan now'; btn.onclick = function () { startReview(o, msg).catch(function () { location.href = '/client/index/' + o.c + '?section=txplan'; }); }; }
+          d.appendChild(btn); L.appendChild(d);
+        });
+      });
+      if (!any) L.innerHTML = '<div style="padding:12px;background:#ecfdf5;border-radius:8px">Every PHP and IOP patient has a current plan. Nothing is due this week.</div>';
+    }
+    draw(false);
+  }
+  return { open: open, badge: badge, load: load };
 })();
 
 if (location.hostname === 'chtc.lightningstep.com') { try { LC.notePages(); } catch (e) {} }
